@@ -117,3 +117,18 @@ func (e *ConsensusEngine) GetStatus() []*ClusterNode {
 	defer e.RUnlock()
 	return e.Nodes
 }
+
+// GetActiveCount returns the number of alive and dead nodes
+func (e *ConsensusEngine) GetActiveCount() (int, int) {
+	e.RLock()
+	defer e.RUnlock()
+	alive, dead := 0, 0
+	for _, n := range e.Nodes {
+		if n.Role == Dead {
+			dead++
+		} else {
+			alive++
+		}
+	}
+	return alive, dead
+}

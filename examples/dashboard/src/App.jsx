@@ -28,6 +28,8 @@ class ErrorBoundary extends React.Component {
 // Memoize the Scene to prevent re-renders on every metric update or mouse move
 const MemoizedScene = memo(Scene);
 
+
+
 function App() {
   const [metrics, setMetrics] = useState({
     total_requests: 0,
@@ -38,19 +40,23 @@ function App() {
     requests_per_sec: 0,
     uptime_seconds: 0,
     health_status: 'HEALTHY',
-    cpu_pct: 0,
-    memory_mb: 0,
-    goroutines: 0,
+    cpu_pct: 12,
+    memory_mb: 24.3,
+    goroutines: 8,
     anomaly_score: 0,
     risk_score: 0,
     chaos_level: 0,
     signal_pulse: 0,
-    fractal_depth: 0,
-    dna_health: 0,
-    generation: 0,
+    fractal_depth: 2,
+    dna_health: 0.85,
+    generation: 1,
     system_temp: 0,
+    heap_objects: 0,
     cluster: [],
-    shatter_state: false
+    shatter_state: false,
+    overload_state: false,
+    evolve_state: false,
+    blackout_state: false
   })
 
   const [isConnected, setConnected] = useState(false)
@@ -62,7 +68,7 @@ function App() {
     const connect = () => {
       if (eventSourceRef.current) eventSourceRef.current.close();
 
-      const es = new EventSource('http://localhost:8888/metrics');
+      const es = new EventSource('http://localhost:54321/metrics');
       eventSourceRef.current = es;
 
       let lastUpdate = 0;
@@ -96,7 +102,7 @@ function App() {
       if (eventSourceRef.current) eventSourceRef.current.close();
       clearTimeout(retryTimeout);
     };
-  }, []);
+  }, [isConnected]);
 
   const handleMouseMove = (e) => {
     const x = (e.clientX / window.innerWidth) * 2 - 1
@@ -105,22 +111,28 @@ function App() {
     if (Math.abs(x - lastPos.current.x) > 0.05 || Math.abs(y - lastPos.current.y) > 0.05) {
       lastPos.current = { x, y }
       if (isConnected) {
-        fetch(`http://localhost:8888/spatial?x=${x.toFixed(2)}&y=${y.toFixed(2)}`, { method: 'POST' }).catch(() => { })
+        fetch(`http://localhost:54321/spatial?x=${x.toFixed(2)}&y=${y.toFixed(2)}`, { method: 'POST' }).catch(() => { })
       }
     }
   }
 
   // Protocol Actions
   const triggerChaos = (val) => {
-    fetch(`http://localhost:8888/orchestrate?chaos=${val}`, { method: 'POST' }).catch(() => { })
+    fetch(`http://localhost:54321/orchestrate?chaos=${val}`, { method: 'POST' }).catch(() => { })
   }
 
   const mutateDNA = () => {
-    fetch(`http://localhost:8888/dna?gene=REPLICATION&val=${Math.random()}`, { method: 'POST' }).catch(() => { })
+    fetch(`http://localhost:54321/dna?gene=REPLICATION&val=${Math.random()}`, { method: 'POST' }).catch(() => { })
   }
 
   const controlNode = (id, action) => {
-    fetch(`http://localhost:8888/cluster/${action}?id=${id}`, { method: 'POST' }).catch(() => { })
+    // Robust ID handling (fallback to 0 if something is wrong)
+    const nodeId = (id !== undefined && id !== null) ? id : 0;
+    console.log(`[AEON_CLUSTER] Triggering ${action} on Node_${nodeId}`);
+    fetch(`http://localhost:54321/cluster/${action}?id=${nodeId}`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => console.log(`[AEON_CLUSTER] Success:`, d))
+      .catch(e => console.error(`[AEON_CLUSTER] Error:`, e));
   }
 
   return (
@@ -138,16 +150,16 @@ function App() {
           overflow: 'hidden'
         }}
       >
-        <div className="scanline" style={{ background: 'none' }} />
+        <div className="scanline" style={{ background: 'none', zIndex: 3 }} />
 
         <div style={{ position: 'fixed', top: 5, right: 5, fontSize: '0.6rem', opacity: 0.3, zIndex: 1000 }}>
           AEON_NODE_READY: {isConnected ? 'STABLE' : 'SYNCING'}
         </div>
 
-        <div className="dashboard-container" style={{ position: 'relative', zIndex: 10, pointerEvents: 'none', flex: 1, padding: '2rem' }}>
+        <div className="dashboard-container" style={{ position: 'fixed', zIndex: 2, pointerEvents: 'none', inset: 0, padding: '2rem' }}>
           <header style={{ pointerEvents: 'auto', marginBottom: '2rem' }}>
             <h1 style={{ margin: 0, fontSize: '2.5rem', letterSpacing: '4px', textShadow: '0 0 20px rgba(0,240,255,0.5)' }}>
-              FASTHTTP_SINGULARITY
+              AEON
               <span className="fast-tag" style={{ fontSize: '0.8rem', color: '#ffaa00', marginLeft: '1rem', verticalAlign: 'middle', background: 'rgba(255,170,0,0.1)', padding: '2px 8px', borderRadius: '4px', border: '1px solid #ffaa00', boxShadow: '0 0 10px #ffaa00' }}>FAST_v13</span>
             </h1>
             <p className="evolution-label" style={{
@@ -160,11 +172,15 @@ function App() {
               textShadow: '0 0 10px #00f0ff',
               animation: 'pulse-text 3s infinite ease-in-out'
             }}>
-              The 3D scene is evolving into a Multi-Core Topology
+
             </p>
             <div className={`status-badge-mini ${isConnected ? '' : 'offline'}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
               <div className="pulse" style={{ width: 10, height: 10, background: isConnected ? '#00f0ff' : '#f00', borderRadius: '50%' }} />
-              <span style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>{isConnected ? 'NODE_01_ACTIVE' : 'LINK_INTERRUPTED'}</span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 'bold', letterSpacing: '1px' }}>
+                {isConnected
+                  ? `NODE_0${metrics.cluster.filter(n => (n.role || '') !== 'DEAD').length}_ACTIVE / 0${metrics.cluster.filter(n => (n.role || '') === 'DEAD').length}_OFFLINE`
+                  : 'LINK_INTERRUPTED'}
+              </span>
             </div>
           </header>
 
@@ -233,7 +249,7 @@ function App() {
               <div className="metrics-grid" style={{ gap: '1rem' }}>
                 <div className="metric-box">
                   <label>CHAOS_LEVEL</label>
-                  <div className="value" style={{ color: '#f04' }}>{(metrics.chaos_level * 100).toFixed(0)}%</div>
+                  <div className="value" style={{ color: '#f04' }}>{metrics.chaos_level.toFixed(0)}%</div>
                 </div>
                 <div className="metric-box">
                   <label>ANOMALY_CORE</label>
@@ -243,8 +259,8 @@ function App() {
                   <input
                     type="range"
                     min="0"
-                    max="100"
-                    value={metrics.chaos_level * 100}
+                    max="300"
+                    value={metrics.chaos_level}
                     onChange={(e) => triggerChaos(e.target.value)}
                     style={{ width: '100%', accentColor: '#f04' }}
                   />
@@ -281,22 +297,22 @@ function App() {
               </div>
               <div className="node-grid-expanded" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.8rem' }}>
                 {(metrics.cluster || []).slice(0, 5).map((node, i) => (
-                  <div key={node.id || i} className={`holographic-node-card ${node.role.toLowerCase()}`}>
+                  <div key={node.id ?? i} className={`holographic-node-card ${(node.role || 'FOLLOWER').toLowerCase()}`}>
                     <div className="holographic-header">
                       <span className="node-label">NODE_0{i}</span>
                       <div className="ping-container">
-                        <div className={`ping-circle ${node.role.toLowerCase()}`} />
-                        <div className={`status-dot ${node.role.toLowerCase()}`} />
+                        <div className={`ping-circle ${(node.role || 'FOLLOWER').toLowerCase()}`} />
+                        <div className={`status-dot ${(node.role || 'FOLLOWER').toLowerCase()}`} />
                       </div>
                     </div>
-                    <div className="node-type" style={{ fontSize: '0.6rem' }}>{node.role}</div>
+                    <div className="node-type" style={{ fontSize: '0.6rem' }}>{node.role || 'FOLLOWER'}</div>
                     <div className="node-telemetry">
                       <div className="telemetry-bar">
-                        <div className="telemetry-fill" style={{ width: node.role === 'DEAD' ? '0%' : '100%', background: node.role === 'LEADER' ? '#ffaa00' : '#00f0ff' }} />
+                        <div className="telemetry-fill" style={{ width: (node.role || '') === 'DEAD' ? '0%' : '100%', background: (node.role || '') === 'LEADER' ? '#ffaa00' : '#00f0ff' }} />
                       </div>
                     </div>
                     <div className="node-actions-holographic">
-                      {node.role === 'DEAD' ? (
+                      {(node.role || '') === 'DEAD' ? (
                         <button onClick={() => controlNode(node.id, 'recover')} className="holo-btn cyan">RESYNC</button>
                       ) : (
                         <button onClick={() => controlNode(node.id, 'fail')} className="holo-btn red">SEVER</button>
@@ -310,13 +326,19 @@ function App() {
             {/* OMEGA_COMMAND */}
             <div className="glass-card">
               <h3>OMEGA_PROTOCOL_COMMAND</h3>
-              <Terminal />
+              <Terminal isConnected={isConnected} />
             </div>
           </div>
         </div>
 
-        {/* 3D_LAYER (Background) - Positioned behind UI with zIndex -1 */}
-        <div style={{ position: 'fixed', inset: 0, zIndex: -1, background: 'transparent', pointerEvents: 'none' }}>
+        {/* 3D_LAYER (Background) - Always visible behind UI */}
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1,
+          background: 'transparent',
+          pointerEvents: 'none'
+        }}>
           <MemoizedScene
             health={metrics.health_status || 'HEALTHY'}
             anomaly={metrics.anomaly_score || 0}
@@ -326,6 +348,9 @@ function App() {
             cluster={metrics.cluster}
             shattered={metrics.shatter_state}
             rps={metrics.requests_per_sec}
+            overload_state={metrics.overload_state}
+            evolve_state={metrics.evolve_state}
+            blackout_state={metrics.blackout_state}
           />
         </div>
       </div>

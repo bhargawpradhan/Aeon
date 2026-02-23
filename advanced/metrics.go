@@ -47,7 +47,10 @@ type ServerMetrics struct {
 	Spatial InfluenceSnapshot `json:"spatial"`
 
 	// v11.0 Omega Protocol
-	ShatterState bool `json:"shatter_state"`
+	ShatterState  bool `json:"shatter_state"`
+	OverloadState bool `json:"overload_state"`
+	EvolveState   bool `json:"evolve_state"`
+	BlackoutState bool `json:"blackout_state"`
 
 	// Internal tracking
 	startTime        time.Time
@@ -151,7 +154,10 @@ func (m *ServerMetrics) UpdateStats() {
 	sx, sy, sg := GlobalSpatial.GetInfluence()
 	m.Spatial = InfluenceSnapshot{X: sx, Y: sy, Gravity: sg}
 
-	m.ShatterState = GlobalOmega.IsShattered()
+	m.ShatterState = GlobalOmega.Shattered
+	m.OverloadState = GlobalOmega.Overload
+	m.EvolveState = GlobalOmega.Evolve
+	m.BlackoutState = GlobalOmega.Blackout
 
 	// Capture temporal snapshot
 	GlobalTemporal.Push(*m)

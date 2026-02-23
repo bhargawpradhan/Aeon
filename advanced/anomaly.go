@@ -14,7 +14,8 @@ type AnomalyEngine struct {
 	baselineRPS  float64
 	anomalyScore float64
 	riskFactor   float64
-	chaosFactor  float64 // Controlled via frontend
+	chaosFactor  float64 // Current displayed chaos
+	targetChaos  float64 // Desired chaos level from frontend
 
 	// History for trend analysis
 	history []float64
@@ -34,6 +35,20 @@ func (e *AnomalyEngine) Update(currentRPS float64, memoryPressure float64) {
 		e.baselineRPS = currentRPS
 	} else {
 		e.baselineRPS = (e.baselineRPS * 0.95) + (currentRPS * 0.05)
+	}
+
+	// Step towards target chaos for smooth UI transition
+	step := 2.5
+	if e.chaosFactor < e.targetChaos {
+		e.chaosFactor += step
+		if e.chaosFactor > e.targetChaos {
+			e.chaosFactor = e.targetChaos
+		}
+	} else if e.chaosFactor > e.targetChaos {
+		e.chaosFactor -= step
+		if e.chaosFactor < e.targetChaos {
+			e.chaosFactor = e.targetChaos
+		}
 	}
 
 	// Calculate Anomaly Score (deviation from baseline)
@@ -58,10 +73,10 @@ func (e *AnomalyEngine) Update(currentRPS float64, memoryPressure float64) {
 	}
 }
 
-// SetChaos modifies the chaos intensity
+// SetChaos modifies the target chaos intensity
 func (e *AnomalyEngine) SetChaos(factor float64) {
 	e.Lock()
-	e.chaosFactor = factor
+	e.targetChaos = factor
 	e.Unlock()
 }
 
@@ -70,6 +85,13 @@ func (e *AnomalyEngine) GetStats() (float64, float64, float64) {
 	e.RLock()
 	defer e.RUnlock()
 	return e.anomalyScore, e.riskFactor, e.chaosFactor
+}
+
+// GetTargetChaos returns the current target chaos level
+func (e *AnomalyEngine) GetTargetChaos() float64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.targetChaos
 }
 
 // NewChaosMiddleware injects artificial latency and errors

@@ -1,0 +1,44 @@
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : {"result":"SEVER
+                    ED","id":"1"}
+                    
+RawContent        : HTTP/1.1 200 OK
+                    Access-Control-A
+                    llow-Origin: *
+                    Access-Control-A
+                    llow-Methods: 
+                    GET, POST, PUT, 
+                    DELETE, OPTIONS
+                    Access-Control-A
+                    llow-Headers: 
+                    Content-Type, 
+                    Authorization
+                    Access-Control-M
+                    ax-Age: 3600...
+Forms             : {}
+Headers           : {[Access-Control
+                    -Allow-Origin, 
+                    *], [Access-Cont
+                    rol-Allow-Method
+                    s, GET, POST, 
+                    PUT, DELETE, 
+                    OPTIONS], [Acces
+                    s-Control-Allow-
+                    Headers, 
+                    Content-Type, 
+                    Authorization], 
+                    [Access-Control-
+                    Max-Age, 
+                    3600]...}
+Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        : mshtml.HTMLDocum
+                    entClass
+RawContentLength  : 30
+
+
+

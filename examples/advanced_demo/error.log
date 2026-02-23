@@ -1,0 +1,21 @@
+Advanced Server starting on :7788
+go : 2026/02/21 23:39:47 
+Error: listen tcp4 :7788: 
+bind: Only one usage of each 
+socket address 
+(protocol/network 
+address/port) is normally 
+permitted.
+At line:1 char:1
++ go run main.go 2>&1 | 
+out-file -encoding ascii 
+error.log; type error. ...
++ ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          :  
+   NotSpecified: (2026/02/21   
+  23:3...ally permitted.:Str   
+ ing) [], RemoteException
+    + FullyQualifiedErrorId :  
+   NativeCommandError
+ 
+exit status 1

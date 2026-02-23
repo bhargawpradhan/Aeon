@@ -18,6 +18,7 @@ func main() {
 
 	// 3. Build Middleware Chain
 	chain := advanced.NewChain(
+		advanced.CORSMiddleware,              // Phase 0: CORS Handling
 		advanced.MetricsMiddleware,           // Phase 2: Live Tracking
 		advanced.OTelMiddleware,              // Observability
 		advanced.NewChaosMiddleware(),        // Chaos Engineering
@@ -73,8 +74,9 @@ func main() {
 			}
 			id := 0
 			fmt.Sscanf(string(ctx.QueryArgs().Peek("id")), "%d", &id)
+			fmt.Printf(">>> CLUSTER_ACTION: SEVER | ID: %d\n", id)
 			advanced.GlobalCluster.FailNode(id)
-			advanced.JSONResponse(ctx, 200, map[string]string{"status": "Node Severed"})
+			advanced.JSONResponse(ctx, 200, map[string]string{"result": "SEVERED", "id": fmt.Sprintf("%d", id)})
 		case "/cluster/recover":
 			if !ctx.IsPost() {
 				ctx.Error("POST required", 405)
@@ -82,8 +84,9 @@ func main() {
 			}
 			id := 0
 			fmt.Sscanf(string(ctx.QueryArgs().Peek("id")), "%d", &id)
+			fmt.Printf(">>> CLUSTER_ACTION: RECOVER | ID: %d\n", id)
 			advanced.GlobalCluster.RecoverNode(id)
-			advanced.JSONResponse(ctx, 200, map[string]string{"status": "Node Re-synced"})
+			advanced.JSONResponse(ctx, 200, map[string]string{"result": "RECOVERED", "id": fmt.Sprintf("%d", id)})
 		case "/spatial":
 			if !ctx.IsPost() {
 				ctx.Error("POST required", 405)
@@ -132,7 +135,7 @@ func main() {
 	finalHandler := chain.Then(handler)
 
 	// 6. Start Advanced Server (with H3 and TCP fallback)
-	addr := ":8888"
+	addr := ":54321"
 	fmt.Printf("Advanced Server starting on %s\n", addr)
 
 	// Note: In a real world scenario, you'd provide a valid TLS config for H3/SSL

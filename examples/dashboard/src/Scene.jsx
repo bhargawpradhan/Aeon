@@ -1,573 +1,550 @@
 import React, { useRef, useMemo, useEffect } from 'react'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Stars, OrbitControls, Line, Float, Sparkles, Torus, Text } from '@react-three/drei'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { Stars, OrbitControls, Float, Sparkles, Text } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette, ChromaticAberration, Noise, Scanline } from '@react-three/postprocessing'
 import * as THREE from 'three'
 
-const BASE_POSITIONS = [
-  [0, 8, 0], [7, 3, 0], [4.5, -6, 0], [-4.5, -6, 0], [-7, 3, 0],
-  [0, 0, 10], [0, 0, -10], [10, 0, 0], [-10, 0, 0]
-]
+// ─── TRUE 3D EVOLVING TOPOLOGY MESH ──────────────────────────────────────────
+// InstancedMesh sphere nodes + live BufferGeometry edges = real network topology
+const TopoMesh = ({ nodeCount = 90, zMin = -30, zMax = -90, rotSpeed = 0.02, color = '#00f0ff', overload, evolve, nodeSize = 0.55 }) => {
+  const instanceRef = useRef()
+  const edgesRef = useRef()
+  const groupRef = useRef()
 
-// Deep Background Topology Structures
-const NeuralLattice = () => {
-  const points = useMemo(() => {
-    const p = []
-    for (let i = 0; i < 50; i++) {
-      p.push(new THREE.Vector3(
-        (Math.random() - 0.5) * 120,
-        (Math.random() - 0.5) * 120,
-        (Math.random() - 0.5) * 100 - 50
-      ))
+  // Base positions for each node (static seed, animated each frame)
+  const bases = useMemo(() => {
+    const a = new Float32Array(nodeCount * 3)
+    for (let i = 0; i < nodeCount; i++) {
+      a[i * 3] = (Math.random() - 0.5) * 220
+      a[i * 3 + 1] = (Math.random() - 0.5) * 150
+      a[i * 3 + 2] = zMin + Math.random() * (zMax - zMin) * -1
     }
-    return p
-  }, [])
+    return a
+  }, [nodeCount, zMin, zMax])
 
-  const lines = useMemo(() => {
-    const l = []
-    for (let i = 0; i < points.length; i++) {
-      let connections = 0
-      for (let j = i + 1; j < points.length; j++) {
-        if (points[i].distanceTo(points[j]) < 30 && connections < 3) {
-          l.push([points[i], points[j]])
-          connections++
-        }
+  // Unique per-node oscillation parameters
+  const phases = useMemo(() => Array.from({ length: nodeCount }, () => ({
+    px: Math.random() * Math.PI * 2,
+    py: Math.random() * Math.PI * 2,
+    pz: Math.random() * Math.PI * 2,
+    fx: 0.12 + Math.random() * 0.5,
+    fy: 0.10 + Math.random() * 0.4,
+    fz: 0.06 + Math.random() * 0.25,
+  })), [nodeCount])
+
+  // Build edge index pairs (nearby nodes)
+  const edgeIdx = useMemo(() => {
+    const idx = []
+    for (let i = 0; i < nodeCount; i++) {
+      let cnt = 0
+      for (let j = i + 1; j < nodeCount && cnt < 4; j++) {
+        const dx = bases[i * 3] - bases[j * 3], dy = bases[i * 3 + 1] - bases[j * 3 + 1], dz = bases[i * 3 + 2] - bases[j * 3 + 2]
+        if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 55) { idx.push(i, j); cnt++ }
       }
     }
-    return l
-  }, [points])
+    return idx
+  }, [bases, nodeCount])
 
-  const group = useRef()
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
-    if (group.current) {
-      group.current.rotation.y = t * 0.015
-      group.current.rotation.x = Math.sin(t * 0.05) * 0.1
+  // Edge geometry (positions filled each frame)
+  const edgeGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeIdx.length * 3), 3))
+    return g
+  }, [edgeIdx])
+
+  // Materials — brighter for visibility
+  const nodeMat = useMemo(() => new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.95,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  }), [color])
+
+  const edgeMat = useMemo(() => new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.35,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  }), [color])
+
+  const nodeGeo = useMemo(() => new THREE.SphereGeometry(nodeSize, 8, 8), [nodeSize])
+  const dummy = useMemo(() => new THREE.Object3D(), [])
+  const livePos = useMemo(() => new Float32Array(nodeCount * 3), [nodeCount])
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime()
+    const spd = evolve ? 2.8 : 0.45
+    const c = overload ? new THREE.Color('#ff0044') : new THREE.Color(color)
+
+    // Update live node positions and write instance matrices
+    const inst = instanceRef.current
+    if (inst) {
+      inst.material.color.copy(c)
+      for (let i = 0; i < nodeCount; i++) {
+        const p = phases[i]
+        const lx = bases[i * 3] + Math.sin(t * spd * p.fx + p.px) * 13
+        const ly = bases[i * 3 + 1] + Math.cos(t * spd * p.fy + p.py) * 10
+        const lz = bases[i * 3 + 2] + Math.sin(t * spd * p.fz + p.pz) * 6
+        livePos[i * 3] = lx; livePos[i * 3 + 1] = ly; livePos[i * 3 + 2] = lz
+
+        // Scale pulse per node for "breathing" look
+        const pulse = nodeSize * (0.6 + Math.sin(t * 2.5 + i * 0.7) * 0.4)
+        dummy.position.set(lx, ly, lz)
+        dummy.scale.setScalar(pulse)
+        dummy.updateMatrix()
+        inst.setMatrixAt(i, dummy.matrix)
+      }
+      inst.instanceMatrix.needsUpdate = true
+    }
+
+    // Update edges to track live node positions
+    const edgeMesh = edgesRef.current
+    if (edgeMesh) {
+      edgeMesh.material.color.copy(c)
+      edgeMesh.material.opacity = 0.25 + Math.sin(t * 0.5) * 0.1
+      const arr = edgeMesh.geometry.attributes.position.array
+      for (let k = 0; k < edgeIdx.length; k++) {
+        const ni = edgeIdx[k]
+        arr[k * 3] = livePos[ni * 3]; arr[k * 3 + 1] = livePos[ni * 3 + 1]; arr[k * 3 + 2] = livePos[ni * 3 + 2]
+      }
+      edgeMesh.geometry.attributes.position.needsUpdate = true
+    }
+
+    // Whole group rotation
+    if (groupRef.current) {
+      groupRef.current.rotation.y += rotSpeed * 0.008
+      groupRef.current.rotation.x = Math.sin(t * 0.07) * 0.09
+      const breathe = evolve ? 1 + Math.sin(t * 1.4) * 0.10 : 1 + Math.sin(t * 0.28) * 0.03
+      groupRef.current.scale.setScalar(breathe)
     }
   })
 
   return (
-    <group ref={group}>
-      {lines.map((pts, i) => (
-        <Line key={i} points={pts} color="#00f0ff" lineWidth={0.2} transparent opacity={0.15} />
-      ))}
-      {points.map((p, i) => (
-        <mesh key={i} position={p}>
-          <sphereGeometry args={[0.08, 4, 4]} />
-          <meshBasicMaterial color="#00f0ff" transparent opacity={0.1} />
-        </mesh>
-      ))}
+    <group ref={groupRef}>
+      {/* Instanced glowing sphere nodes */}
+      <instancedMesh ref={instanceRef} args={[nodeGeo, nodeMat, nodeCount]} frustumCulled={false} />
+      {/* Live-tracked connection edges */}
+      <lineSegments ref={edgesRef} geometry={edgeGeo} material={edgeMat} frustumCulled={false} />
     </group>
   )
 }
 
+// ─── ATMOSPHERIC TOPOLOGY WRAPPER ─────────────────────────────────────────────
+// 3 independent TopoMesh layers at different depths / rotations / colors
+const AtmosphericTopology = ({ evolve, overload, blackout }) => {
+  if (blackout) return null
+  const col = overload ? '#ace0e9ff' : '#00f0ff'
+  const col2 = overload ? '#7db7dbff' : '#7700ff'
+
+  return (
+    <>
+      {/* Layer A — front dense cyan topology (primary, most visible) */}
+      <TopoMesh nodeCount={100} zMin={-15} zMax={-50} rotSpeed={0.025} color={col} overload={overload} evolve={evolve} nodeSize={0.65} />
+
+      {/* Layer B — mid purple sparser topology (counter-rotates) */}
+      <TopoMesh nodeCount={70} zMin={-50} zMax={-90} rotSpeed={-0.018} color={col2} overload={overload} evolve={evolve} nodeSize={0.45} />
+
+      {/* Layer C — deep wide slow topology (parallax background) */}
+      <TopoMesh nodeCount={120} zMin={-90} zMax={-160} rotSpeed={0.008} color={col} overload={overload} evolve={evolve} nodeSize={0.28} />
+
+      {/* Three atmospheric orbit rings at different depths */}
+      <mesh rotation={[0.1, 0, 0]} position={[0, 0, -40]}>
+        <torusGeometry args={[70, 0.22, 8, 240]} />
+        <meshBasicMaterial color={col} transparent opacity={0.15} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <mesh rotation={[Math.PI / 3, Math.PI / 5, 0]} position={[0, 0, -80]}>
+        <torusGeometry args={[115, 0.14, 8, 240]} />
+        <meshBasicMaterial color={col2} transparent opacity={0.1} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <mesh rotation={[Math.PI / 6, -Math.PI / 4, Math.PI / 8]} position={[0, 0, -130]}>
+        <torusGeometry args={[175, 0.08, 8, 240]} />
+        <meshBasicMaterial color={col} transparent opacity={0.06} blending={THREE.AdditiveBlending} />
+      </mesh>
+
+      {/* Ambient sparkle field in the topology zone */}
+      <Sparkles
+        count={evolve ? 3000 : 900}
+        scale={[240, 170, 140]}
+        size={evolve ? 5 : 2.2}
+        color={col}
+        speed={evolve ? 5 : 0.8}
+        opacity={0.55}
+        position={[0, 0, -50]}
+      />
+    </>
+  )
+}
+
+// ─── SIGNAL STREAKS ───────────────────────────────────────────────────────────
 const SignalStreaks = () => {
-  const group = useRef()
-  const streaks = useMemo(() => {
-    return Array.from({ length: 15 }).map(() => ({
-      start: new THREE.Vector3((Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100, -80),
-      end: new THREE.Vector3((Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100, -80),
-      speed: 0.1 + Math.random() * 0.2,
-      offset: Math.random() * 100
-    }))
-  }, [])
+  const streaks = useMemo(() => Array.from({ length: 20 }).map(() => ({
+    start: new THREE.Vector3((Math.random() - 0.5) * 120, (Math.random() - 0.5) * 100, -40),
+    end: new THREE.Vector3((Math.random() - 0.5) * 120, (Math.random() - 0.5) * 100, -15),
+    speed: 0.15 + Math.random() * 0.3,
+    offset: Math.random() * 10,
+    color: Math.random() > 0.5 ? '#00f0ff' : '#7700ff'
+  })), [])
 
   const refs = useRef([])
 
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime()
     streaks.forEach((s, i) => {
       const mesh = refs.current[i]
       if (mesh) {
-        const progress = (t * s.speed * 2.5 + s.offset) % 1 // Much faster
+        const progress = (t * s.speed + s.offset) % 1
         mesh.position.lerpVectors(s.start, s.end, progress)
         mesh.material.opacity = Math.sin(progress * Math.PI) * 0.9
-        mesh.material.emissiveIntensity = 30
       }
     })
   })
 
   return (
-    <group ref={group}>
+    <group>
       {streaks.map((s, i) => (
         <mesh key={i} ref={el => refs.current[i] = el}>
-          <sphereGeometry args={[0.3, 8, 8]} />
-          <meshStandardMaterial color="#00f0ff" emissive="#00f0ff" emissiveIntensity={10} transparent />
+          <sphereGeometry args={[0.25, 6, 6]} />
+          <meshBasicMaterial color={s.color} transparent blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
     </group>
   )
 }
 
-const EnergyArc = ({ startPosRef, endPos, color }) => {
-  const lineRef = useRef()
-  const points = useMemo(() => [new THREE.Vector3(), new THREE.Vector3(...endPos)], [endPos])
-  const particles = useRef([])
-
-  useEffect(() => {
-    particles.current = Array.from({ length: 5 }).map(() => ({
-      pos: new THREE.Vector3(),
-      offset: Math.random()
-    }))
-  }, [])
-
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
-    if (lineRef.current && startPosRef.current) {
-      lineRef.current.setPoints([startPosRef.current, endPos])
-      lineRef.current.material.dashOffset = -t * 1.5
-      lineRef.current.material.opacity = 0.1 + Math.sin(t * 2) * 0.05
-    }
-  })
-
-  return (
-    <group>
-      <Line
-        ref={lineRef}
-        points={[[0, 0, 0], [0, 0, 0]]}
-        color={color}
-        lineWidth={0.8}
-        dashed
-        dashScale={6}
-        dashSize={0.25}
-        gapSize={0.4}
-        transparent
-        depthWrite={false}
-      />
-      {particles.current.map((p, i) => (
-        <FlowParticle key={i} startPosRef={startPosRef} endPos={endPos} color={color} offset={p.offset} />
-      ))}
-    </group>
-  )
-}
-
-const FlowParticle = ({ startPosRef, endPos, color, offset }) => {
-  const meshRef = useRef()
-  const targetEnd = useMemo(() => new THREE.Vector3(...endPos), [endPos])
-
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
-    if (meshRef.current && startPosRef.current) {
-      const progress = (t * 1.5 + offset) % 1 // Hyper-fast flow
-      meshRef.current.position.lerpVectors(startPosRef.current, targetEnd, progress)
-      const pulse = Math.sin(progress * Math.PI)
-      meshRef.current.scale.setScalar(pulse * 1.0)
-      meshRef.current.material.emissiveIntensity = pulse * 60
-    }
-  })
-
-  return (
-    <mesh ref={meshRef}>
-      <sphereGeometry args={[0.2, 12, 12]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={20} transparent opacity={0.8} />
-    </mesh>
-  )
-}
-
-const FractalCore = React.forwardRef(({ scale, health, anomaly, depth, temp, role, spatial, shattered, position = [0, 0, 0], isRoot = false, isGhost = false }, ref) => {
+// ─── FRACTAL CORE ─────────────────────────────────────────────────────────────
+const FractalCore = React.forwardRef(({
+  scale = 1, health, anomaly, depth = 0, temp = 0, role, spatial,
+  shattered, position = [0, 0, 0], isRoot = false, isGhost = false
+}, ref) => {
   const meshRef = useRef()
   const shellRef = useRef()
-  const ringRef1 = useRef()
-  const ringRef2 = useRef()
-  const innerMesh = useRef()
+  const ringRef = useRef()
+  const innerRef = useRef()
   const localRef = useRef()
-  const lightRef = useRef()
 
   const color = useMemo(() => {
-    if (isGhost) return "#004455"
-    if (role === 'LEADER') return "#ffaa00"
-    if (shattered) return "#ff0044"
-    if (role === 'DEAD') return "#333333"
-    if (health === 'CRITICAL') return "#ff0044"
-    if (temp > 80) return "#ff4400"
-    return "#00f0ff"
+    if (isGhost) return '#003344'
+    if (role === 'LEADER') return '#608fa9ff'
+    if (shattered) return '#99c1d0ff'
+    if (role === 'DEAD') return '#222222'
+    if (health === 'CRITICAL') return '#83c7deff'
+    if (temp > 80) return '#ff4400'
+    return '#00f0ff'
   }, [role, health, temp, shattered, isGhost])
 
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime()
     const target = (ref && ref.current) || localRef.current
-    if (target) {
-      // Base rotation
-      if (meshRef.current) {
-        meshRef.current.rotation.y = t * (isGhost ? 0.05 : 0.5 + depth * 0.2)
-        meshRef.current.rotation.z = t * (isGhost ? 0.02 : 0.3)
-      }
+    if (!target) return
 
-      if (shellRef.current) {
-        shellRef.current.rotation.y = -t * 0.3
-        shellRef.current.rotation.x = t * 0.2
-      }
-
-      if (innerMesh.current) {
-        innerMesh.current.rotation.x = -t * 2
-        innerMesh.current.rotation.z = -t * 1.5
-      }
-
-      // Orbital Rings (Only for root cores)
-      if (isRoot && !isGhost) {
-        if (ringRef1.current) {
-          ringRef1.current.rotation.x = t * 0.5
-          ringRef1.current.rotation.y = t * 0.2
-        }
-        if (ringRef2.current) {
-          ringRef2.current.rotation.y = -t * 0.8
-          ringRef2.current.rotation.z = t * 0.4
-        }
-      }
-
-      const pulse = 1 + (role === 'LEADER' ? Math.sin(t * 5) * 0.15 : Math.sin(t * 2) * 0.05)
-      target.scale.set(scale * pulse, scale * pulse, scale * pulse)
-      if (lightRef.current) lightRef.current.intensity = pulse * 10
+    if (meshRef.current) {
+      meshRef.current.rotation.y = t * (isGhost ? 0.04 : 0.4 + depth * 0.15)
+      meshRef.current.rotation.z = t * 0.25
     }
+    if (shellRef.current) {
+      shellRef.current.rotation.y = -t * 0.25
+      shellRef.current.rotation.x = t * 0.18
+    }
+    if (innerRef.current) {
+      innerRef.current.rotation.x = -t * 1.8
+      innerRef.current.rotation.z = -t * 1.3
+    }
+    if (ringRef.current && isRoot && !isGhost) {
+      ringRef.current.rotation.x = t * 0.4
+      ringRef.current.rotation.y = -t * 0.6
+    }
+    const pulse = 1 + Math.sin(t * (role === 'LEADER' ? 4 : 2)) * (role === 'LEADER' ? 0.12 : 0.04)
+    target.scale.set(scale * pulse, scale * pulse, scale * pulse)
   })
 
-  // Multi-Core Expansion - Enhanced with more sub-cores and interconnects
-  const subCores = []
   const subPositions = [
-    [1.8, 1.0, 0], [-1.8, -1.0, 0], [0, 1.8, 1.0], [0, -1.8, -1.0],
-    [1.0, 0, 1.8], [-1.0, 0, -1.8], [0.8, -1.2, 0.8], [-0.8, 1.2, -0.8]
+    [1.8, 1.0, 0], [-1.8, -1.0, 0], [0, 1.8, 1.0], [0, -1.8, -1.0]
   ]
-  const maxDepth = isGhost ? 0 : (temp > 85 ? depth + 1 : depth)
-  if (maxDepth > 0 && role !== 'DEAD') {
-    const coreCount = role === 'LEADER' ? 8 : (health === 'CRITICAL' ? 2 : 4)
-    for (let i = 0; i < coreCount; i++) {
-      const subPos = subPositions[i % subPositions.length].map(v => v * scale * (1.2 + Math.sin(i * 0.5) * 0.2))
+  const subCores = []
+  if (depth > 0 && role !== 'DEAD' && !isGhost) {
+    const cnt = role === 'LEADER' ? 4 : 2
+    for (let i = 0; i < cnt; i++) {
+      const p = subPositions[i % subPositions.length].map(v => v * scale * 1.2)
       subCores.push(
-        <group key={`subgroup-${i}`}>
-          {(role === 'LEADER' || i % 2 === 0) && isRoot &&
-            <EnergyArc startPosRef={{ current: new THREE.Vector3(0, 0, 0) }} endPos={subPos} color={color} />
-          }
-          <FractalCore position={subPos} scale={scale * 0.42} health={health} anomaly={anomaly} depth={maxDepth - 1} temp={temp} role={role} spatial={spatial} shattered={shattered} />
-        </group>
+        <FractalCore key={i} position={p} scale={scale * 0.4}
+          health={health} depth={depth - 1} temp={temp} role={role} shattered={shattered} />
       )
     }
   }
 
   return (
     <group ref={ref || localRef} position={position}>
-      {/* Central Singularity Shells (Nested) */}
       {isRoot && !isGhost && (
-        <>
-          <mesh ref={shellRef}>
-            <icosahedronGeometry args={[scale * 1.15, 1]} />
-            <meshStandardMaterial
-              color={color}
-              emissive={color}
-              emissiveIntensity={4}
-              wireframe
-              transparent
-              opacity={0.15}
-            />
-          </mesh>
-          <mesh>
-            <sphereGeometry args={[scale * 1.4, 16, 16]} />
-            <meshStandardMaterial
-              color={color}
-              emissive={color}
-              emissiveIntensity={1}
-              wireframe
-              transparent
-              opacity={0.05}
-            />
-          </mesh>
-        </>
+        <mesh ref={shellRef}>
+          <icosahedronGeometry args={[scale * 1.12, 1]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.5} wireframe transparent opacity={0.12} />
+        </mesh>
       )}
-
-      {/* Main Core Body */}
       <mesh ref={meshRef}>
         <dodecahedronGeometry args={[scale, 0]} />
         <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={isGhost ? 0.8 : (shattered ? 60 : role === 'LEADER' ? 40 : 15)}
-          wireframe={!shattered || isGhost}
-          transparent
-          opacity={isGhost ? 0.1 : (role === 'DEAD' ? 0.3 : 1.0)}
+          color={role === 'DEAD' ? '#222222' : color}
+          emissive={role === 'DEAD' ? '#000000' : color}
+          emissiveIntensity={isGhost ? 0.6 : (role === 'DEAD' ? 0 : (role === 'LEADER' ? 8 : 5))}
+          wireframe={!shattered}
+          transparent opacity={isGhost ? 0.08 : (role === 'DEAD' ? 0.15 : 0.9)}
         />
-        {!isGhost && (
-          <mesh ref={innerMesh}>
-            <octahedronGeometry args={[scale * 0.45, 0]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={80} />
+        {!isGhost && !shattered && (
+          <mesh ref={innerRef}>
+            <octahedronGeometry args={[scale * 0.42, 0]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={10} />
           </mesh>
         )}
       </mesh>
-
-      {/* High-Fidelity Orbital Rings */}
       {isRoot && !isGhost && role !== 'DEAD' && (
-        <>
-          <mesh ref={ringRef1}>
-            <torusGeometry args={[scale * 2.2, 0.03, 24, 200]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={12} transparent opacity={0.5} />
-          </mesh>
-          <mesh ref={ringRef2}>
-            <torusGeometry args={[scale * 2.8, 0.015, 24, 200]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={25} transparent opacity={0.6} />
-          </mesh>
-          <mesh rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[scale * 3.5, 0.005, 12, 180]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={10} transparent opacity={0.3} />
-          </mesh>
-          <pointLight ref={lightRef} color={color} distance={scale * 12} intensity={20} />
-        </>
+        <mesh ref={ringRef}>
+          <torusGeometry args={[scale * 2.0, 0.04, 16, 180]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={5} transparent opacity={0.35} />
+        </mesh>
       )}
-
+      {isRoot && !isGhost && role !== 'DEAD' && (
+        <pointLight color={color} distance={scale * 12} intensity={6} />
+      )}
       {subCores}
     </group>
   )
 })
 
-const NeuralWeb = ({ cluster }) => {
-  const linesRef = useRef([])
+// ─── CENTRAL CIRCULAR MESH ────────────────────────────────────────────────────
+const CentralMesh = ({ accentColor = '#00f0ff', evolve, overload }) => {
+  const sphereRef = useRef()
+  const ring1Ref = useRef()
+  const ring2Ref = useRef()
+  const ring3Ref = useRef()
+  const glowRef = useRef()
 
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
-    const getOrbPos = (idx) => {
-      const base = BASE_POSITIONS[idx] || [0, 0, 0]
-      return [
-        base[0] + Math.sin(t * 0.5 + idx) * 1.5,
-        base[1] + Math.cos(t * 0.7 + idx) * 1.5,
-        base[2] + Math.sin(t * 0.3 + idx) * 2
-      ]
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime()
+    const spd = evolve ? 2.0 : 0.6
+
+    // Slowly rotating wireframe sphere
+    if (sphereRef.current) {
+      sphereRef.current.rotation.y = t * spd * 0.3
+      sphereRef.current.rotation.x = t * spd * 0.15
+      const breathe = 1 + Math.sin(t * 1.2) * 0.05
+      sphereRef.current.scale.setScalar(breathe)
     }
 
-    let lineIdx = 0
-    for (let i = 0; i < cluster.length; i++) {
-      for (let j = i + 1; j < cluster.length; j++) {
-        if (lineIdx >= 10) break
-        const line = linesRef.current[lineIdx]
-        if (line) {
-          line.setPoints([getOrbPos(i), getOrbPos(j)])
-        }
-        lineIdx++
-      }
+    // Three orbiting rings at different axes
+    if (ring1Ref.current) {
+      ring1Ref.current.rotation.x = t * spd * 0.4
+      ring1Ref.current.rotation.z = t * spd * 0.2
+    }
+    if (ring2Ref.current) {
+      ring2Ref.current.rotation.y = t * spd * 0.35
+      ring2Ref.current.rotation.x = Math.PI / 3 + t * spd * 0.15
+    }
+    if (ring3Ref.current) {
+      ring3Ref.current.rotation.z = t * spd * 0.25
+      ring3Ref.current.rotation.y = -Math.PI / 4 + t * spd * 0.1
+    }
+
+    // Inner glow pulse
+    if (glowRef.current) {
+      glowRef.current.material.opacity = 0.08 + Math.sin(t * 1.5) * 0.04
+      const gPulse = 0.95 + Math.sin(t * 2) * 0.05
+      glowRef.current.scale.setScalar(gPulse)
     }
   })
 
+  const col = overload ? '#fdfefeff' : accentColor
+
   return (
-    <group>
-      {Array.from({ length: 20 }).map((_, i) => (
-        <Line key={i} ref={el => linesRef.current[i] = el} points={[[0, 0, 0], [0, 0, 0]]} color="#00f0ff" lineWidth={1.2} transparent opacity={0.18} />
-      ))}
+    <group position={[0, 0, 0]}>
+      {/* Wireframe icosphere — the main circular mesh */}
+      <mesh ref={sphereRef}>
+        <icosahedronGeometry args={[18, 2]} />
+        <meshStandardMaterial
+          color={col} emissive={col} emissiveIntensity={2}
+          wireframe transparent opacity={0.25}
+          blending={THREE.AdditiveBlending} depthWrite={false}
+        />
+      </mesh>
+
+      {/* Inner soft glow sphere */}
+      <mesh ref={glowRef}>
+        <sphereGeometry args={[14, 32, 32]} />
+        <meshBasicMaterial
+          color={col} transparent opacity={0.08}
+          blending={THREE.AdditiveBlending} depthWrite={false}
+        />
+      </mesh>
+
+      {/* Orbit ring 1 — equatorial */}
+      <mesh ref={ring1Ref}>
+        <torusGeometry args={[24, 0.08, 16, 200]} />
+        <meshBasicMaterial color={col} transparent opacity={0.3} blending={THREE.AdditiveBlending} depthWrite={false} />
+      </mesh>
+
+      {/* Orbit ring 2 — tilted */}
+      <mesh ref={ring2Ref}>
+        <torusGeometry args={[28, 0.06, 16, 200]} />
+        <meshBasicMaterial color={overload ? '#ff2200' : '#7700ff'} transparent opacity={0.2} blending={THREE.AdditiveBlending} depthWrite={false} />
+      </mesh>
+
+      {/* Orbit ring 3 — counter-tilted */}
+      <mesh ref={ring3Ref}>
+        <torusGeometry args={[32, 0.04, 16, 200]} />
+        <meshBasicMaterial color={col} transparent opacity={0.15} blending={THREE.AdditiveBlending} depthWrite={false} />
+      </mesh>
+
+      {/* Subtle point light from center */}
+      <pointLight color={col} distance={60} intensity={4} />
     </group>
   )
 }
 
-const SceneContent = ({ health, anomaly, pulse, depth, temp, cluster = [], spatial = {}, shattered, rps }) => {
-  const group = useRef()
+// ─── PACKET FLOW ──────────────────────────────────────────────────────────────
+const PacketFlow = ({ from, to, color, speed = 1.2 }) => {
+  const ref = useRef()
+  const f = useMemo(() => new THREE.Vector3(...from), [from.join(',')])
+  const t = useMemo(() => new THREE.Vector3(...to), [to.join(',')])
+  useFrame(({ clock }) => {
+    if (ref.current) {
+      const progress = (clock.getElapsedTime() * speed) % 1
+      ref.current.position.lerpVectors(f, t, progress)
+      ref.current.material.opacity = Math.sin(progress * Math.PI) * 0.9
+    }
+  })
+  return (
+    <mesh ref={ref}>
+      <sphereGeometry args={[0.18, 8, 8]} />
+      <meshBasicMaterial color={color} transparent blending={THREE.AdditiveBlending} />
+    </mesh>
+  )
+}
+
+// ─── MAIN SCENE CONTENT ───────────────────────────────────────────────────────
+const SceneContent = ({
+  health = 'HEALTHY', anomaly = 0, pulse = 0, depth = 0, temp = 0,
+  cluster = [], spatial = {}, shattered = false, rps = 0,
+  overload_state = false, evolve_state = false, blackout_state = false
+}) => {
   const nodesRef = useRef([])
-  const packetsRef = useRef([])
-  const loomingRef = useRef()
   const fluxRingRef = useRef()
 
-  const leaderIdx = useMemo(() => cluster.findIndex(n => n.role === 'LEADER'), [cluster])
+  const ghostCores = useMemo(() => Array.from({ length: 10 }, () => ({
+    pos: [(Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100, -60 - Math.random() * 40],
+    scale: 3 + Math.random() * 6
+  })), [])
 
-  // Distant Ghost Topology
-  const ghostCores = useMemo(() => {
-    const g = []
-    for (let i = 0; i < 15; i++) {
-      g.push({
-        pos: [(Math.random() - 0.5) * 140, (Math.random() - 0.5) * 140, -70 - Math.random() * 50],
-        scale: 4 + Math.random() * 8
-      })
-    }
-    return g
-  }, [])
+  const clusterPositions = useMemo(() => [
+    [0, 8, 0], [14, 3, 0], [8.5, -10, 0], [-8.5, -10, 0], [-14, 3, 0]
+  ], [])
 
-  const mouse = useRef(new THREE.Vector2())
-
-  useEffect(() => {
-    const handleMove = (e) => {
-      mouse.current.x = (e.clientX / window.innerWidth) * 2 - 1
-      mouse.current.y = -(e.clientY / window.innerHeight) * 2 + 1
-    }
-    window.addEventListener('mousemove', handleMove)
-    return () => window.removeEventListener('mousemove', handleMove)
-  }, [])
-
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
-    if (group.current) group.current.rotation.y = t * 0.05
-    if (loomingRef.current) {
-      loomingRef.current.rotation.y = -t * 0.02
-      loomingRef.current.position.y = Math.sin(t * 0.2) * 5
-    }
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime()
     if (fluxRingRef.current) {
       fluxRingRef.current.rotation.x = Math.PI / 2 + Math.sin(t * 0.5) * 0.1
-      fluxRingRef.current.rotation.y = t * 0.1
-      fluxRingRef.current.scale.setScalar(1 + Math.sin(t * 2) * 0.02)
+      fluxRingRef.current.rotation.y = t * 0.08
     }
-
-    const getPos = (idx) => {
-      const base = BASE_POSITIONS[idx] || [0, 0, 0]
-      return new THREE.Vector3(
-        base[0] + Math.sin(t * 0.5 + idx) * 1.5 + mouse.current.x * 2,
-        base[1] + Math.cos(t * 0.7 + idx) * 1.5 + mouse.current.y * 2,
-        base[2] + Math.sin(t * 0.3 + idx) * 2
-      )
-    }
-
-    const leaderPos = leaderIdx !== -1 ? getPos(leaderIdx) : new THREE.Vector3()
-
-    cluster.slice(0, 5).forEach((node, i) => {
-      const pos = getPos(i)
-      const nodeEl = nodesRef.current[i]
-      if (nodeEl) nodeEl.position.copy(pos)
-
-      if (i !== leaderIdx && node.role !== 'DEAD' && leaderIdx !== -1) {
-        const p1 = packetsRef.current[i * 2]
-        const p2 = packetsRef.current[i * 2 + 1]
-        const speed = 1.2 + (rps / 50) // More aggressive speed
-        if (p1) p1.position.lerpVectors(leaderPos, pos, (t * speed) % 1)
-        if (p2) p2.position.lerpVectors(leaderPos, pos, (t * speed * 1.8) % 1)
-      }
-    })
   })
+
+  const accentColor = overload_state ? '#8bb8d9ff' : '#a9e5e9ff'
 
   return (
     <>
-      <fog attach="fog" args={['#000000', 100, 500]} />
-      <ambientLight intensity={1.5} />
-      <pointLight position={[0, 0, 0]} intensity={30} color="#00f0ff" distance={150} />
-      <pointLight position={[30, 30, 30]} intensity={10} color="#ffaa00" />
-      <Stars radius={300} depth={150} count={50000} factor={16} saturation={1} fade speed={12} />
-      <Sparkles count={1000} size={8} scale={[200, 200, 200]} color="#00f0ff" opacity={0.6} />
+      <fog attach="fog" args={['#000010', 180, blackout_state ? 250 : 800]} />
+      <ambientLight intensity={blackout_state ? 0.1 : 1.5} color="#88bed5ff" />
+      <pointLight position={[0, 0, 80]} intensity={overload_state ? 80 : 30} color={accentColor} />
+      <pointLight position={[0, 50, 0]} intensity={20} color="#7700ff" />
 
-      <NeuralLattice />
+      {/* Far star field */}
+      <Stars radius={400} depth={200} count={blackout_state ? 2000 : 60000} factor={20} saturation={1} fade speed={6} />
+
+      {/* ★ THE EVOLVING ATMOSPHERIC TOPOLOGY — primary visible background ★ */}
+      <AtmosphericTopology evolve={evolve_state} overload={overload_state} blackout={blackout_state} />
+
+      {/* Moving signal streaks in mid-ground */}
       <SignalStreaks />
 
-      {/* Looming Meta-Core (Fixed Depth) */}
-      <FractalCore
-        ref={loomingRef}
-        position={[0, 0, -150]}
-        scale={30}
-        isGhost={true}
-        isRoot={true}
-        role="DEAD"
-        spatial={spatial}
-      />
+      {/* Giant ambient flux ring */}
+      <mesh ref={fluxRingRef} rotation={[Math.PI / 2, 0, 0]} position={[0, 0, -10]}>
+        <torusGeometry args={[45, 0.08, 12, 250]} />
+        <meshBasicMaterial color={accentColor} transparent opacity={0.18} blending={THREE.AdditiveBlending} />
+      </mesh>
 
-      {/* Central Flux Ring */}
-      <Torus ref={fluxRingRef} args={[50, 0.1, 16, 250]} rotation={[Math.PI / 2, 0, 0]}>
-        <meshStandardMaterial color="#00f0ff" emissive="#00f0ff" emissiveIntensity={20} transparent opacity={0.2} />
-      </Torus>
+      {/* Ghost cores deep in background */}
+      {ghostCores.map((g, i) => (
+        <FractalCore key={`ghost-${i}`} position={g.pos} scale={g.scale}
+          isGhost role="DEAD" isRoot />
+      ))}
+      {/* ★ Central Circular Mesh — rotating wireframe sphere + orbit rings */}
+      <CentralMesh accentColor={accentColor} evolve={evolve_state} overload={overload_state} />
 
-      <group ref={group}>
-        {/* Central Singularity Core (The Sovereign Anchor) */}
-        <group>
+
+      {/* Cluster satellite nodes */}
+      {cluster.slice(0, 5).map((node, i) => (
+        <group key={node.id || i} position={clusterPositions[i] || [0, 0, 0]}>
           <FractalCore
-            scale={12}
-            health="HEALTHY"
-            temp={temp}
-            role="LEADER"
-            isRoot={true}
-            position={[0, 0, 0]}
+            ref={el => nodesRef.current[i] = el}
+            scale={node.role === 'LEADER' ? 3 : 2}
+            health={health} anomaly={anomaly} depth={1}
+            temp={temp} role={node.role} shattered={shattered} isRoot
           />
-          {/* Internal Plasma Event Horizon */}
-          <mesh rotation={[0, 0, Math.PI / 4]}>
-            <sphereGeometry args={[11, 32, 32]} />
-            <meshStandardMaterial color="#00f0ff" emissive="#00f0ff" emissiveIntensity={0.5} wireframe transparent opacity={0.03} />
-          </mesh>
-          <Sparkles count={100} scale={20} size={3} color="#00f0ff" speed={1.5} />
-
-          <Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}>
-            <Text
-              position={[0, -18, 0]}
-              fontSize={1.2}
-              color="#00f0ff"
-              font="https://fonts.gstatic.com/s/jetbrainsmono/v18/tMe62o-9-Xq9eF8N9pcf_L8.woff"
-              maxWidth={30}
-              textAlign="center"
-              anchorX="center"
-              anchorY="middle"
-            >
-              The 3D scene is evolving into a Multi-Core Topology
-              <meshStandardMaterial emissive="#00f0ff" emissiveIntensity={5} />
-            </Text>
-          </Float>
+          {/* Packet flows between cluster and center */}
+          {node.role !== 'DEAD' && (
+            <>
+              <PacketFlow from={clusterPositions[i]} to={[0, 0, 0]} color={accentColor} speed={1.0 + rps / 80} />
+              <PacketFlow from={[0, 0, 0]} to={clusterPositions[i]} color="#ffaa00" speed={1.5 + rps / 80} />
+            </>
+          )}
         </group>
+      ))}
 
-        {/* Dynamic Multi-Core Interconnects */}
-        {(cluster || []).slice(0, 5).map((node, i) => (
-          <EnergyArc
-            key={`arc-${i}`}
-            startPosRef={{ current: nodesRef.current[i]?.position || new THREE.Vector3(...BASE_POSITIONS[i]) }}
-            endPos={[0, 0, 0]}
-            color={node.role === 'LEADER' ? '#ffaa00' : '#00f0ff'}
-          />
-        ))}
+      {/* 3D Evolving Label */}
+      <Float speed={3} rotationIntensity={0.3} floatIntensity={1.0}>
+        <Text
+          position={[0, -22, 5]}
+          fontSize={1.8}
+          color={accentColor}
+          maxWidth={50}
+          textAlign="center"
+          anchorX="center"
+          anchorY="middle"
+          outlineWidth={0.05}
+          outlineColor="#000022"
+        >
+          {evolve_state
+            ? 'EVOLUTIONARY SHIFT AUTHORIZED'
+            : overload_state
+              ? '⚠ SYSTEM OVERLOAD INITIATED'
+              : blackout_state
+                ? '[ BLACKOUT ACTIVE ]'
+                : ''}
+          <meshStandardMaterial emissive={accentColor} emissiveIntensity={25} toneMapped={false} />
+        </Text>
+      </Float>
 
-        <NeuralWeb cluster={cluster} />
-
-        {/* Active Node Cluster */}
-        {(cluster || []).slice(0, 5).map((node, i) => (
-          <group key={node.id || i}>
-            <FractalCore
-              ref={el => nodesRef.current[i] = el}
-              scale={node.role === 'LEADER' ? 3.5 : 2.2}
-              health={health}
-              anomaly={anomaly}
-              depth={depth}
-              temp={temp}
-              role={node.role}
-              spatial={spatial}
-              shattered={shattered}
-              isRoot={true}
-            />
-
-            {node.role !== 'LEADER' && node.role !== 'DEAD' && leaderIdx !== -1 && (
-              <group>
-                <mesh ref={el => packetsRef.current[i * 2] = el}>
-                  <sphereGeometry args={[0.2, 12, 12]} />
-                  <meshStandardMaterial color="#ffaa00" emissive="#ffaa00" emissiveIntensity={25} />
-                </mesh>
-                <mesh ref={el => packetsRef.current[i * 2 + 1] = el}>
-                  <sphereGeometry args={[0.16, 12, 12]} />
-                  <meshStandardMaterial color="#00f0ff" emissive="#00f0ff" emissiveIntensity={25} />
-                </mesh>
-              </group>
-            )}
-
-            {node.role === 'LEADER' && <pointLight intensity={15} color="#ffaa00" distance={60} />}
-          </group>
-        ))}
-
-        {/* Ghost Topology (Infinite Structural Depth) */}
-        {ghostCores.map((g, i) => (
-          <FractalCore
-            key={`ghost-${i}`}
-            position={g.pos}
-            scale={g.scale}
-            isGhost={true}
-            isRoot={true}
-            role="DEAD"
-            spatial={spatial}
-          />
-        ))}
-      </group>
-
-      <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={shattered ? 40 : 4.5} />
+      <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={shattered || overload_state ? 35 : 3.5} />
 
       <EffectComposer disableNormalPass>
-        <Bloom luminanceThreshold={0} mipmapBlur intensity={8} radius={1.1} />
-        <Vignette eskil={false} offset={0.1} darkness={1.5} />
-        <ChromaticAberration offset={shattered ? [0.04, 0.04] : [0.008, 0.008]} />
-        {shattered && <Noise opacity={1.0} />}
-        {temp > 90 && <Scanline opacity={0.6} />}
+        <Bloom luminanceThreshold={0} mipmapBlur intensity={overload_state ? 18 : 8} radius={1.0} />
+        <Vignette eskil={false} offset={0.1} darkness={blackout_state ? 3.0 : 1.0} />
+        <ChromaticAberration offset={shattered || overload_state ? [0.04, 0.04] : [0.006, 0.006]} />
+        {(shattered || overload_state) && <Noise opacity={0.6} />}
+        {(temp > 90 || overload_state) && <Scanline opacity={0.5} />}
       </EffectComposer>
     </>
   )
 }
 
-const Scene = (props) => {
-  return (
-    <Canvas
-      camera={{ position: [0, 12, 60], fov: 60 }}
-      style={{ background: 'transparent', width: '100vw', height: '100vh' }}
-      gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
-    >
-      <SceneContent {...props} />
-    </Canvas>
-  )
-}
+// ─── CANVAS WRAPPER ───────────────────────────────────────────────────────────
+const Scene = (props) => (
+  <Canvas
+    camera={{ position: [0, 8, 55], fov: 65 }}
+    style={{ background: 'transparent', width: '100%', height: '100%' }}
+    gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+  >
+    <SceneContent {...props} />
+  </Canvas>
+)
 
 export default Scene
